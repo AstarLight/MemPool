@@ -4,7 +4,7 @@
 
 
 
-MemPool::MemPool(int pool_size, int chunk_size)
+MemPool::MemPool(unsigned long pool_size, int chunk_size)
 {
 	void* p = malloc(pool_size);
     
@@ -15,20 +15,23 @@ MemPool::MemPool(int pool_size, int chunk_size)
 	ChunkSize = chunk_size;
 	PoolSize = pool_size;
 	TotalChunkNum = PoolSize / ChunkSize;
-	FreeMemSize = PoolSize;
 	UsedMemSize = 0;
 	Alloced_Chunk_Count = 0;
+	BusyLinkListLen = 0;
+	FreeLinkListLen = 0;
 	pBusyLinkListHead = NULL;
 	pFreeLinkListHead = pMemPool_Start;
 	pBusyLinkListTail = NULL;
 	data_offset = ChunkSize - sizeof(chunk_hdr_t);
-
+	DataSize = data_offset;
 	chunk_hdr_t* cur_pos = pMemPool_Start;
+	FreeMemSize = TotalChunkNum*DataSize;
 	int i = 1;
 	//空闲链表初始化
 	while (i < TotalChunkNum)
 	{
 		chunk_hdr_t* pHdr = cur_pos;
+		//LOG("hdr: %p\n", pHdr);
 		chunk_hdr_t* NextChunk = (chunk_hdr_t*)((char*)(pHdr + 1) + data_offset);  //指向下一块hdr的地址
 		pHdr->chunk_id = i++;
 		pHdr->used_flag = false;
@@ -36,7 +39,10 @@ MemPool::MemPool(int pool_size, int chunk_size)
 		pHdr->pFreeNext = NextChunk;
 		cur_pos = NextChunk;
 		FreeLinkListLen++;
+		//LOG("init chunk id:%d\n", pHdr->chunk_id);
+		//LOG("NEXT CHUNK:%p\n", NextChunk);
 	}
+
 
 	if (i == TotalChunkNum)  //处理最后一块chunk
 	{
@@ -57,7 +63,7 @@ MemPool::~MemPool()
 	free(pMemPool_Start);
 }
 
-void* MemPool::AllocMem(int Memsize)
+void* MemPool::AllocMem(unsigned long Memsize)
 {
 	if (Memsize > DataSize || Memsize > FreeMemSize)
 	{
@@ -69,7 +75,13 @@ void* MemPool::AllocMem(int Memsize)
 
 	chunk_hdr_t* start = pFreeLinkListHead;
 	chunk_hdr_t* next = start->pFreeNext;
+	void* data_start = start + 1;
 	//对该数据块区域的使用标志置1,更新空闲链表
+	if (start->used_flag != 0)
+	{
+		LOG("This is a bad chunk! chunk id:%d\n", start->chunk_id);
+		return NULL;
+	}
 	start->used_flag = 1;
 	pFreeLinkListHead = next;
 
@@ -88,9 +100,14 @@ void* MemPool::AllocMem(int Memsize)
 		pBusyLinkListTail = start;
 	}
 
+	start->pBusyNext = NULL;
+	start->pFreeNext = NULL;
+
 	BusyLinkListLen++;
 	FreeLinkListLen--;
-	return start;
+	FreeMemSize -= DataSize;
+	UsedMemSize += DataSize;
+	return data_start;
 }
 
 
@@ -100,42 +117,82 @@ int MemPool::DestroyMemPool()
 	return 0;
 }
 
-int MemPool::ReleaseMem(void* p)
+int MemPool::ReleaseMem(void* m)
 {
-	if (p < (void*)pMemPool_Start && p < (void*)((char*)pMemPool_Start + PoolSize))
-	{
-		int offset = (char*)p - (char*)pMemPool_Start;  //地址偏移量
-		int chunk_id = offset / ChunkSize;
+	LOG("release mem: %p\n", m);
 
+	if (m > pMemPool_Start && m < (void*)((char*)pMemPool_Start + PoolSize))
+	{
+		chunk_hdr_t* pHhr = (chunk_hdr_t*)m - 1;
+		LOG("hdr : %p\n", pHhr);
+		int chunk_id = pHhr->chunk_id;
+		LOG("release chunk id: %d\n", chunk_id);
 		chunk_hdr_t* p = pBusyLinkListHead;
-		chunk_hdr_t* pre;
+
+		//当该节点为头结点，特殊处理
+		if (p->chunk_id == chunk_id)
+		{
+			pBusyLinkListHead = p->pBusyNext;
+
+			p->pBusyNext = NULL;
+			pFreeLinkListTail->pFreeNext = p;
+			p->pFreeNext = NULL;
+			p->used_flag = 0;
+			BusyLinkListLen--;
+			FreeLinkListLen++;
+			FreeMemSize += DataSize;
+			UsedMemSize -= DataSize;
+
+			return 0;
+		}
+
+		chunk_hdr_t* pre = NULL;
+		bool find_flag = false;
 		while (p)
 		{
+			LOG("chunk id: %d\n", p->chunk_id);
 			if (p->chunk_id == chunk_id)
 			{
-				if (!p->used_flag)
+				LOG("find chunk %d\n", p->chunk_id);
 
+				if (!p->used_flag)
 				{
-					LOG("This is a bad chunk! chunk id: %d\n");
+					LOG("This is a bad chunk! chunk id: %d\n", p->chunk_id);
 					return -1;
 				}
 
-				LOG("Release chunk %d\n");
-				pre->pBusyNext = p->pBusyNext;
+				LOG("Release chunk %d\n",p->chunk_id);
+				if (p != pBusyLinkListHead)
+				{
+					pre->pBusyNext = p->pBusyNext;
+				}
+			
 				p->pBusyNext = NULL;
 				pFreeLinkListTail->pFreeNext = p;
 				p->pFreeNext = NULL;
 				p->used_flag = 0;
+				find_flag = true;
+				BusyLinkListLen--;
+				FreeLinkListLen++;
+				FreeMemSize += DataSize;
+				UsedMemSize -= DataSize;
+				break;
 			}
 			pre = p;
 			p = p->pBusyNext;
 
 		}
+
+		if (!find_flag)
+		{
+			LOG("can't find such memory!\n");
+		}
 	}
 	else
 	{
-		free(p);
+		free(m);
 	}
+
 
 	return 0;
 }
@@ -211,7 +268,7 @@ int MemPool::EnlargeMemPoolSize(int add_size)
 
 void MemPool::MemPool_info_dump()
 {
-	LOG("PoolSize: %d\n", PoolSize);
+	LOG("\nPoolSize: %d\n", PoolSize);
 	LOG("ChunkSize: %d\n", ChunkSize);
 	LOG("DataSize: %d\n", DataSize);
 	LOG("TotalChunkNum: %d\n", TotalChunkNum);
@@ -221,4 +278,30 @@ void MemPool::MemPool_info_dump()
 	LOG("data_offset: %d\n", data_offset);
 	LOG("BusyLinkListLen: %d\n", BusyLinkListLen);
 	LOG("FreeLinkListLen: %d\n", FreeLinkListLen);
+	LOG("pMemPool_Start: %p\n\n", pMemPool_Start);
+}
+
+void MemPool::BusyLinkList_dump()
+{
+	chunk_hdr_t* p = pBusyLinkListHead;
+
+	while (p)
+	{
+		LOG("id: %d\n", p->chunk_id);
+		LOG("used_flag: %d\n\n", p->used_flag);
+		p = p->pBusyNext;
+	}
+	
+}
+
+void MemPool::FreeLinkList_dump()
+{
+	chunk_hdr_t* p = pFreeLinkListHead;
+
+	while (p)
+	{
+		LOG("id: %d\n", p->chunk_id);
+		LOG("used_flag: %d\n\n", p->used_flag);
+		p = p->pFreeNext;
+	}
 }

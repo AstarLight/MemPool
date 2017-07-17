@@ -1,7 +1,7 @@
 #ifndef __MEMPOOL_H__
 #define __MEMPOOL_H__
 
-#define DEBUG_ON 1
+#define DEBUG_ON 0
 #define LOG(fmt,...) do{ if(DEBUG_ON)  printf(fmt,##__VA_ARGS__); }while(0)
 
 typedef struct chunk_hdr_s chunk_hdr_t;
@@ -19,11 +19,11 @@ typedef struct chunk_hdr_s
 class MemPool
 {
 public:
-	MemPool(int pool_size = 10*1024*1024, int chunk_size = 256);  //默认MemPool总大小10MB，一个chunk大小为512bytes,一共20480块
+	MemPool(unsigned long pool_size = 10*1024*1024, int chunk_size = 256);  //默认MemPool总大小10MB，一个chunk大小为512bytes,一共20480块
 
 	~MemPool();
 
-	 void* AllocMem(int Memsize);
+	 void* AllocMem(unsigned long Memsize);
 
 	 int DestroyMemPool();
 
@@ -37,13 +37,17 @@ public:
 
 	 int ReleaseMem(void* p);
 
+	 void BusyLinkList_dump();
+
+	 void FreeLinkList_dump();
+
 private:
-	int PoolSize;
+	unsigned long PoolSize;
 	int ChunkSize;
 	int DataSize;  //除去头部，剩余的data区域大小。hdr大小为16bytes
 	int TotalChunkNum;
-	int FreeMemSize;
-	int UsedMemSize;
+	unsigned long FreeMemSize;
+	unsigned long UsedMemSize;
 	int Alloced_Chunk_Count;
 	int data_offset;
 	int BusyLinkListLen;
